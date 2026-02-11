@@ -62,3 +62,50 @@ Tasks
 
 Backend Skill Shown
 - Idempotent writes (ignore duplicates)
+
+🔹 Week 2 — Transaction Indexing + Core APIs
+🎯 Goal: Turn raw blockchain data into queryable backend APIs
+
+Day 8–9: Transaction Indexing
+Deliverables
+- Transactions stored in DB
+
+Tasks
+- for each block
+    - iterate transactions
+    - store:
+        - hash
+        - from
+        - to
+        - value
+        - gas
+        - blockNumber
+
+Important: transaction hash = unique constraint 
+
+Day 10: REST API — Transactions
+Deliverables: "GET /transactions?address=0x..."
+
+Features:
+- incoming OR outgoing txs
+- Pagination
+
+Backend Signal
+- Query optimization
+- Pagination design
+
+Day 11: Latest Block API 
+Deliverables: "GET /blocks/latest"
+
+Returns:
+- block number
+- timestamp
+- tx count
+
+Day 12-13: error handling & retries
+Deliverables: Stable ingestion 
+
+Tasks:
+- retry failed block processing
+- graceful RPC failure handling
+

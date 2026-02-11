@@ -1,7 +1,9 @@
 package com.example.minieetherscan.service;
 
 import com.example.minieetherscan.entity.Block;
+import com.example.minieetherscan.entity.Transaction;
 import com.example.minieetherscan.repository.BlockRepository;
+import com.example.minieetherscan.repository.TransactionRepository;
 import io.reactivex.disposables.Disposable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +17,7 @@ import java.math.BigInteger;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Service
 public class EthereumService {
@@ -22,11 +25,13 @@ public class EthereumService {
     private static final Logger log = LoggerFactory.getLogger(EthereumService.class);
     private final Web3j web3j;
     private final BlockRepository blockRepository;
+    private final TransactionRepository transactionRepository;
     private Disposable blockSubscription;
 
-    public EthereumService(Web3j web3j, BlockRepository blockRepository) {
+    public EthereumService(Web3j web3j, BlockRepository blockRepository, TransactionRepository transactionRepository) {
         this.web3j = web3j;
         this.blockRepository = blockRepository;
+        this.transactionRepository = transactionRepository;
     }
 
     public void logBlockchainInfo() {
@@ -44,7 +49,7 @@ public class EthereumService {
     public void subscribeToNewBlocks() {
         log.info("Subscribing to new blocks...");
 
-        blockSubscription = web3j.blockFlowable(false).subscribe(
+        blockSubscription = web3j.blockFlowable(true).subscribe(
                 ethBlock -> {
                     EthBlock.Block block = ethBlock.getBlock();
                     LocalDateTime timestamp = LocalDateTime.ofInstant(
@@ -59,6 +64,9 @@ public class EthereumService {
 
                     // Save block to database (idempotent)
                     saveBlock(block.getNumber().longValue(), block.getHash(), block.getTimestamp().longValue());
+
+                    // Index transactions from this block
+                    indexTransactions(block);
                 },
                 error -> log.error("Error in block subscription", error)
         );
@@ -80,6 +88,49 @@ public class EthereumService {
             log.debug("Block {} already persisted by another process", blockNumber);
         } catch (Exception e) {
             log.error("Error saving block {}", blockNumber, e);
+        }
+    }
+
+    private void indexTransactions(EthBlock.Block block) {
+        Long blockNumber = block.getNumber().longValue();
+        List<EthBlock.TransactionResult> transactions = block.getTransactions();
+
+        int saved = 0;
+        for (EthBlock.TransactionResult txResult : transactions) {
+            EthBlock.TransactionObject tx = (EthBlock.TransactionObject) txResult.get();
+            if (saveTransaction(tx, blockNumber)) {
+                saved++;
+            }
+        }
+
+        if (!transactions.isEmpty()) {
+            log.info("Block {} | Indexed {}/{} transactions", blockNumber, saved, transactions.size());
+        }
+    }
+
+    private boolean saveTransaction(EthBlock.TransactionObject tx, Long blockNumber) {
+        try {
+            if (transactionRepository.findByTxHash(tx.getHash()).isPresent()) {
+                log.debug("Transaction {} already exists. Skipping.", tx.getHash());
+                return false;
+            }
+
+            Transaction transaction = new Transaction(
+                    tx.getHash(),
+                    tx.getFrom(),
+                    tx.getTo(),
+                    tx.getValue().toString(),
+                    tx.getGas().longValue(),
+                    blockNumber
+            );
+            transactionRepository.save(transaction);
+            return true;
+        } catch (DataIntegrityViolationException e) {
+            log.debug("Transaction {} already persisted by another process", tx.getHash());
+            return false;
+        } catch (Exception e) {
+            log.error("Error saving transaction {}", tx.getHash(), e);
+            return false;
         }
     }
 
