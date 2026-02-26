@@ -4,6 +4,7 @@ import com.example.minieetherscan.entity.Block;
 import com.example.minieetherscan.entity.Transaction;
 import com.example.minieetherscan.repository.BlockRepository;
 import com.example.minieetherscan.repository.TransactionRepository;
+import io.reactivex.Flowable;
 import io.reactivex.disposables.Disposable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,11 +19,17 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class EthereumService {
 
     private static final Logger log = LoggerFactory.getLogger(EthereumService.class);
+    private static final int MAX_BLOCK_RETRIES = 3;
+    private static final long BLOCK_RETRY_DELAY_MS = 2000;
+    private static final long INITIAL_RECONNECT_DELAY_MS = 1000;
+    private static final long MAX_RECONNECT_DELAY_MS = 30000;
+
     private final Web3j web3j;
     private final BlockRepository blockRepository;
     private final TransactionRepository transactionRepository;
@@ -49,45 +56,73 @@ public class EthereumService {
     public void subscribeToNewBlocks() {
         log.info("Subscribing to new blocks...");
 
-        blockSubscription = web3j.blockFlowable(true).subscribe(
-                ethBlock -> {
-                    EthBlock.Block block = ethBlock.getBlock();
-                    LocalDateTime timestamp = LocalDateTime.ofInstant(
-                            Instant.ofEpochSecond(block.getTimestamp().longValue()),
-                            ZoneId.systemDefault()
+        blockSubscription = web3j.blockFlowable(true)
+                .retryWhen(errors -> errors.zipWith(
+                        Flowable.range(1, Integer.MAX_VALUE),
+                        (error, attempt) -> attempt
+                ).flatMap(attempt -> {
+                    long delay = Math.min(
+                            INITIAL_RECONNECT_DELAY_MS * (1L << (attempt - 1)),
+                            MAX_RECONNECT_DELAY_MS
                     );
+                    log.warn("Block subscription error (attempt {}), reconnecting in {}ms",
+                            attempt, delay);
+                    return Flowable.timer(delay, TimeUnit.MILLISECONDS);
+                }))
+                .subscribe(
+                        ethBlock -> processBlock(ethBlock.getBlock()),
+                        error -> log.error("Block subscription terminated unexpectedly", error)
+                );
+    }
 
-                    log.info("New Block | Number: {} | Timestamp: {} | Tx Count: {}",
-                            block.getNumber(),
-                            timestamp,
-                            block.getTransactions().size());
-
-                    // Save block to database (idempotent)
-                    saveBlock(block.getNumber().longValue(), block.getHash(), block.getTimestamp().longValue());
-
-                    // Index transactions from this block
-                    indexTransactions(block);
-                },
-                error -> log.error("Error in block subscription", error)
+    private void processBlock(EthBlock.Block block) {
+        LocalDateTime timestamp = LocalDateTime.ofInstant(
+                Instant.ofEpochSecond(block.getTimestamp().longValue()),
+                ZoneId.systemDefault()
         );
+
+        log.info("New Block | Number: {} | Timestamp: {} | Tx Count: {}",
+                block.getNumber(),
+                timestamp,
+                block.getTransactions().size());
+
+        for (int attempt = 1; attempt <= MAX_BLOCK_RETRIES; attempt++) {
+            try {
+                saveBlock(block.getNumber().longValue(), block.getHash(), block.getTimestamp().longValue());
+                indexTransactions(block);
+                return;
+            } catch (Exception e) {
+                if (attempt == MAX_BLOCK_RETRIES) {
+                    log.error("Failed to process block {} after {} attempts",
+                            block.getNumber(), MAX_BLOCK_RETRIES, e);
+                } else {
+                    log.warn("Error processing block {} (attempt {}/{}), retrying in {}ms",
+                            block.getNumber(), attempt, MAX_BLOCK_RETRIES, BLOCK_RETRY_DELAY_MS);
+                    try {
+                        Thread.sleep(BLOCK_RETRY_DELAY_MS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     public void saveBlock(Long blockNumber, String blockHash, Long timestamp) {
-        try {
-            // Check if block already exists (idempotent)
-            if (blockRepository.findByBlockNumber(blockNumber).isPresent()) {
-                log.debug("Block {} already exists in database. Skipping.", blockNumber);
-                return;
-            }
+        // Check if block already exists (idempotent)
+        if (blockRepository.findByBlockNumber(blockNumber).isPresent()) {
+            log.debug("Block {} already exists in database. Skipping.", blockNumber);
+            return;
+        }
 
+        try {
             Block block = new Block(blockNumber, blockHash, timestamp);
             blockRepository.save(block);
             log.info("Block {} saved to database", blockNumber);
         } catch (DataIntegrityViolationException e) {
             // Handle race condition where block was inserted by another thread
             log.debug("Block {} already persisted by another process", blockNumber);
-        } catch (Exception e) {
-            log.error("Error saving block {}", blockNumber, e);
         }
     }
 
@@ -109,27 +144,25 @@ public class EthereumService {
     }
 
     private boolean saveTransaction(EthBlock.TransactionObject tx, Long blockNumber) {
-        try {
-            if (transactionRepository.findByTxHash(tx.getHash()).isPresent()) {
-                log.debug("Transaction {} already exists. Skipping.", tx.getHash());
-                return false;
-            }
+        if (transactionRepository.findByTxHash(tx.getHash()).isPresent()) {
+            log.debug("Transaction {} already exists. Skipping.", tx.getHash());
+            return false;
+        }
 
+        try {
             Transaction transaction = new Transaction(
                     tx.getHash(),
                     tx.getFrom(),
                     tx.getTo(),
-                    tx.getValue().toString(),
-                    tx.getGas().longValue(),
+                    tx.getValue(),
+                    null,  // gasUsed — populated in Phase 4 (receipt fetching)
+                    null,  // status — populated in Phase 4 (receipt fetching)
                     blockNumber
             );
             transactionRepository.save(transaction);
             return true;
         } catch (DataIntegrityViolationException e) {
             log.debug("Transaction {} already persisted by another process", tx.getHash());
-            return false;
-        } catch (Exception e) {
-            log.error("Error saving transaction {}", tx.getHash(), e);
             return false;
         }
     }

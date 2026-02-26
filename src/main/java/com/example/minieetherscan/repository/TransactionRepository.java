@@ -13,4 +13,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
     Optional<Transaction> findByTxHash(String txHash);
 
     Page<Transaction> findByFromAddressOrToAddress(String fromAddress, String toAddress, Pageable pageable);
+
+    long countByBlockNumber(Long blockNumber);
+
+    void deleteByBlockNumber(Long blockNumber);
 }

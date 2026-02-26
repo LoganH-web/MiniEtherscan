@@ -9,4 +9,8 @@ import java.util.Optional;
 @Repository
 public interface BlockRepository extends JpaRepository<Block, Long> {
     Optional<Block> findByBlockNumber(Long blockNumber);
+
+    Optional<Block> findTopByOrderByBlockNumberDesc();
+
+    boolean existsByBlockNumber(Long blockNumber);
 }

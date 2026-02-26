@@ -1,13 +1,15 @@
 package com.example.minieetherscan.entity;
 
 import jakarta.persistence.*;
+import java.math.BigInteger;
 
 @Entity
 @Table(name = "transactions", uniqueConstraints = {
         @UniqueConstraint(columnNames = "tx_hash", name = "uk_tx_hash")
 }, indexes = {
         @Index(columnList = "from_address", name = "idx_from_address"),
-        @Index(columnList = "to_address", name = "idx_to_address")
+        @Index(columnList = "to_address", name = "idx_to_address"),
+        @Index(columnList = "block_number", name = "idx_block_number")
 })
 public class Transaction {
 
@@ -25,10 +27,13 @@ public class Transaction {
     private String toAddress;
 
     @Column(name = "value", nullable = false)
-    private String value;
+    private BigInteger value;
 
-    @Column(name = "gas", nullable = false)
-    private Long gas;
+    @Column(name = "gas_used")
+    private BigInteger gasUsed;
+
+    @Column(name = "status")
+    private Boolean status;
 
     @Column(name = "block_number", nullable = false)
     private Long blockNumber;
@@ -36,12 +41,13 @@ public class Transaction {
     public Transaction() {
     }
 
-    public Transaction(String txHash, String fromAddress, String toAddress, String value, Long gas, Long blockNumber) {
+    public Transaction(String txHash, String fromAddress, String toAddress, BigInteger value, BigInteger gasUsed, Boolean status, Long blockNumber) {
         this.txHash = txHash;
         this.fromAddress = fromAddress;
         this.toAddress = toAddress;
         this.value = value;
-        this.gas = gas;
+        this.gasUsed = gasUsed;
+        this.status = status;
         this.blockNumber = blockNumber;
     }
 
@@ -77,20 +83,28 @@ public class Transaction {
         this.toAddress = toAddress;
     }
 
-    public String getValue() {
+    public BigInteger getValue() {
         return value;
     }
 
-    public void setValue(String value) {
+    public void setValue(BigInteger value) {
         this.value = value;
     }
 
-    public Long getGas() {
-        return gas;
+    public BigInteger getGasUsed() {
+        return gasUsed;
     }
 
-    public void setGas(Long gas) {
-        this.gas = gas;
+    public void setGasUsed(BigInteger gasUsed) {
+        this.gasUsed = gasUsed;
+    }
+
+    public Boolean getStatus() {
+        return status;
+    }
+
+    public void setStatus(Boolean status) {
+        this.status = status;
     }
 
     public Long getBlockNumber() {
@@ -108,8 +122,9 @@ public class Transaction {
                 ", txHash='" + txHash + '\'' +
                 ", fromAddress='" + fromAddress + '\'' +
                 ", toAddress='" + toAddress + '\'' +
-                ", value='" + value + '\'' +
-                ", gas=" + gas +
+                ", value=" + value +
+                ", gasUsed=" + gasUsed +
+                ", status=" + status +
                 ", blockNumber=" + blockNumber +
                 '}';
     }
